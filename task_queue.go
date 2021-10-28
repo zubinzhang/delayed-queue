@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	defaultPrefetchCount = 1
-	defaultMessageTTL    = int(10 * time.Second)
+	defaultPrefetchCount  = 1
+	defaultMessageTTL     = int(10 * time.Second)
+	DELAYED_EXCHANGE_TYPE = "x-delayed-message"
+	DELAYED_TYPE          = "direct"
 )
 
 type Message struct {
@@ -28,27 +30,34 @@ type Message struct {
 }
 
 type Option struct {
-	QueueName     string
-	Exchange      string
-	Key           string
-	serviceName   string
-	messageTTL    int
-	prefetchCount int
+	ServiceName   string
+	MessageTTL    int
+	PrefetchCount int
 }
 
 type TaskQueue struct {
-	conn    *amqp.Connection
-	channel *amqp.Channel
-	url     string
-	option  Option
+	conn        *amqp.Connection
+	channel     *amqp.Channel
+	url         string
+	option      Option
+	workQueue   string
+	failedQueue string
+	exchange    string
+	key         string
 }
 
 // new rabbitmq instance.
-func NewRabbitMQ(amqpUrl string, config Option) *TaskQueue {
-	if config.QueueName == "" {
-		panic("QueueName can not be empty")
+func NewTaskQueue(amqpUrl string, config Option) *TaskQueue {
+	if config.ServiceName == "" {
+		panic("serviceName can not be empty")
 	}
-	return &TaskQueue{url: amqpUrl, option: config}
+	return &TaskQueue{
+		url:         amqpUrl,
+		option:      config,
+		exchange:    fmt.Sprintf("%s_exchange", config.ServiceName),
+		workQueue:   fmt.Sprintf("%s_work_queue", config.ServiceName),
+		failedQueue: fmt.Sprintf("%s_failed_queue", config.ServiceName),
+	}
 }
 
 // connect connection and channel
@@ -74,18 +83,33 @@ func (q *TaskQueue) Destroy() {
 }
 
 // publish a msg.
-func (q *TaskQueue) Publish(jobName, body string) error {
-	_, err := q.channel.QueueDeclare(
-		q.option.QueueName, // name
-		false,              // durable
-		false,              // delete when unused
-		false,              // exclusive
-		false,              // no-wait
-		nil,                // arguments
+func (q *TaskQueue) Publish(jobName, body string, delay int) error {
+	args := make(amqp.Table)
+	args["x-delayed-type"] = DELAYED_TYPE
+	err := q.channel.ExchangeDeclare(
+		q.exchange,            // name
+		DELAYED_EXCHANGE_TYPE, // type
+		true,                  // durable
+		false,                 // auto-deleted
+		false,                 // internal
+		false,                 // no-wait
+		args,                  // arguments
 	)
+
 	if err != nil {
-		return errors.Wrap(err, "Failed to declare a queue")
+		return errors.Wrap(err, "Failed to declare a exchange")
 	}
+	// _, err = q.channel.QueueDeclare(
+	// 	q.option.queueName, // name
+	// 	false,              // durable
+	// 	false,              // delete when unused
+	// 	false,              // exclusive
+	// 	false,              // no-wait
+	// 	nil,                // arguments
+	// )
+	// if err != nil {
+	// 	return errors.Wrap(err, "Failed to declare a queue")
+	// }
 
 	payload, err := proto.Marshal(&protos.Payload{
 		Id:        uuid.New(),
@@ -97,14 +121,22 @@ func (q *TaskQueue) Publish(jobName, body string) error {
 		errors.Wrap(err, "Failed to marshaling payload")
 	}
 
+	headers := make(amqp.Table)
+	if delay != 0 {
+		headers["x-delay"] = delay
+	}
+
 	err = q.channel.Publish(
-		q.option.Exchange,  // exchange
-		q.option.QueueName, // routing key
-		false,              // mandatory
-		false,              // immediate
+		q.exchange,  // exchange
+		q.workQueue, // routing key
+		false,       // mandatory
+		false,       // immediate
 		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        payload,
+			DeliveryMode: amqp.Persistent,
+			Timestamp:    time.Now(),
+			ContentType:  "text/plain",
+			Body:         payload,
+			Headers:      headers,
 		})
 	if err != nil {
 		return errors.Wrap(err, "Failed to publish a message")
@@ -115,26 +147,46 @@ func (q *TaskQueue) Publish(jobName, body string) error {
 
 // consume msg.
 func (q *TaskQueue) Consume(handler func(msg Message) error) error {
-	_, err := q.channel.QueueDeclare(
-		q.option.QueueName, // name
-		false,              // durable
-		false,              // delete when unused
-		false,              // exclusive
-		false,              // no-wait
-		nil,                // arguments
+	args := make(amqp.Table)
+	args["x-delayed-type"] = DELAYED_TYPE
+	err := q.channel.ExchangeDeclare(
+		q.exchange,            // name
+		DELAYED_EXCHANGE_TYPE, // type
+		true,                  // durable
+		false,                 // auto-deleted
+		false,                 // internal
+		false,                 // no-wait
+		args,                  // arguments
+	)
+	if err != nil {
+		return errors.Wrap(err, "Failed to declare a exchange")
+	}
+
+	_, err = q.channel.QueueDeclare(
+		q.workQueue, // name
+		false,       // durable
+		false,       // delete when unused
+		false,       // exclusive
+		false,       // no-wait
+		nil,         // arguments
 	)
 	if err != nil {
 		return errors.Wrap(err, "Failed to declare a queue")
 	}
 
+	err = q.channel.QueueBind(q.workQueue, q.workQueue, q.exchange, false, nil)
+	if err != nil {
+		return errors.Wrap(err, "Failed to bind queue")
+	}
+
 	msgs, err := q.channel.Consume(
-		q.option.QueueName, // queue
-		"",                 // consumer
-		true,               // auto-ack
-		false,              // exclusive
-		false,              // no-local
-		false,              // no-wait
-		nil,                // args
+		q.workQueue, // queue
+		"",          // consumer
+		true,        // auto-ack
+		false,       // exclusive
+		false,       // no-local
+		false,       // no-wait
+		nil,         // args
 	)
 	if err != nil {
 		return errors.Wrap(err, "Failed to register a consumer")

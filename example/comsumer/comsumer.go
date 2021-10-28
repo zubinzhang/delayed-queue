@@ -10,8 +10,8 @@ import (
 )
 
 func main() {
-	mq, err := taskqueue.NewRabbitMQ("amqp://admin:password@localhost:5672/", taskqueue.Option{
-		QueueName: "test",
+	mq, err := taskqueue.NewTaskQueue("amqp://admin:password@localhost:5672/", taskqueue.Option{
+		ServiceName: "test",
 	}).Connect()
 	if err != nil {
 		fmt.Printf("%+v", err)
