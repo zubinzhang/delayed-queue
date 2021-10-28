@@ -3,11 +3,16 @@
 package taskqueue
 
 import (
+	"fmt"
 	"log"
 	"time"
 
+	"github.com/go-basic/uuid"
 	"github.com/pkg/errors"
 	"github.com/streadway/amqp"
+	"github.com/zubinzhang/taskqueue/protos"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -26,47 +31,52 @@ type Option struct {
 	QueueName     string
 	Exchange      string
 	Key           string
-	PrefetchCount int
+	serviceName   string
+	messageTTL    int
+	prefetchCount int
 }
 
-type RabbitMQ struct {
+type TaskQueue struct {
 	conn    *amqp.Connection
 	channel *amqp.Channel
-	option  Option
 	url     string
+	option  Option
 }
 
-// new rabbitmq instance
-func NewRabbitMQ(amqpUrl string, config Option) (*RabbitMQ, error) {
+// new rabbitmq instance.
+func NewRabbitMQ(amqpUrl string, config Option) *TaskQueue {
 	if config.QueueName == "" {
 		panic("QueueName can not be empty")
 	}
-	rabbitmq := &RabbitMQ{url: amqpUrl, option: config}
+	return &TaskQueue{url: amqpUrl, option: config}
+}
+
+// connect connection and channel
+func (q *TaskQueue) Connect() (*TaskQueue, error) {
 	var err error
 
-	rabbitmq.conn, err = amqp.Dial(rabbitmq.url)
+	q.conn, err = amqp.Dial(q.url)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to connect to RabbitMQ")
 	}
 
-	rabbitmq.channel, err = rabbitmq.conn.Channel()
+	q.channel, err = q.conn.Channel()
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to open a channel")
 	}
-
-	return rabbitmq, nil
+	return q, nil
 }
 
-// close channel and connection
-func (r *RabbitMQ) Destory() {
-	r.channel.Close()
-	r.conn.Close()
+// close channel and connection.
+func (q *TaskQueue) Destroy() {
+	q.channel.Close()
+	q.conn.Close()
 }
 
-// publish a msg
-func (r *RabbitMQ) Publish(message string) error {
-	_, err := r.channel.QueueDeclare(
-		r.option.QueueName, // name
+// publish a msg.
+func (q *TaskQueue) Publish(jobName, body string) error {
+	_, err := q.channel.QueueDeclare(
+		q.option.QueueName, // name
 		false,              // durable
 		false,              // delete when unused
 		false,              // exclusive
@@ -77,14 +87,24 @@ func (r *RabbitMQ) Publish(message string) error {
 		return errors.Wrap(err, "Failed to declare a queue")
 	}
 
-	err = r.channel.Publish(
-		r.option.Exchange,  // exchange
-		r.option.QueueName, // routing key
+	payload, err := proto.Marshal(&protos.Payload{
+		Id:        uuid.New(),
+		Timestamp: timestamppb.Now(),
+		JobName:   jobName,
+		Body:      []byte(body),
+	})
+	if err != nil {
+		errors.Wrap(err, "Failed to marshaling payload")
+	}
+
+	err = q.channel.Publish(
+		q.option.Exchange,  // exchange
+		q.option.QueueName, // routing key
 		false,              // mandatory
 		false,              // immediate
 		amqp.Publishing{
 			ContentType: "text/plain",
-			Body:        []byte(message),
+			Body:        payload,
 		})
 	if err != nil {
 		return errors.Wrap(err, "Failed to publish a message")
@@ -93,10 +113,10 @@ func (r *RabbitMQ) Publish(message string) error {
 	return nil
 }
 
-// consume msg
-func (r *RabbitMQ) Consume(handler func(msg Message) error) error {
-	q, err := r.channel.QueueDeclare(
-		r.option.QueueName, // name
+// consume msg.
+func (q *TaskQueue) Consume(handler func(msg Message) error) error {
+	_, err := q.channel.QueueDeclare(
+		q.option.QueueName, // name
 		false,              // durable
 		false,              // delete when unused
 		false,              // exclusive
@@ -107,14 +127,14 @@ func (r *RabbitMQ) Consume(handler func(msg Message) error) error {
 		return errors.Wrap(err, "Failed to declare a queue")
 	}
 
-	msgs, err := r.channel.Consume(
-		q.Name, // queue
-		"",     // consumer
-		true,   // auto-ack
-		false,  // exclusive
-		false,  // no-local
-		false,  // no-wait
-		nil,    // args
+	msgs, err := q.channel.Consume(
+		q.option.QueueName, // queue
+		"",                 // consumer
+		true,               // auto-ack
+		false,              // exclusive
+		false,              // no-local
+		false,              // no-wait
+		nil,                // args
 	)
 	if err != nil {
 		return errors.Wrap(err, "Failed to register a consumer")
@@ -124,11 +144,18 @@ func (r *RabbitMQ) Consume(handler func(msg Message) error) error {
 
 	go func() {
 		for d := range msgs {
-			handler(Message{CorrelationId: d.CorrelationId, Payload: d.Body, MessageId: d.MessageId, Timestamp: d.Timestamp})
+			payload := &protos.Payload{}
+			err = proto.Unmarshal(d.Body, payload)
+			if err != nil {
+				log.Fatal("unmarshaling error: ", err)
+			}
+			fmt.Println(payload)
+			handler(Message{CorrelationId: d.CorrelationId, Payload: payload.Body, MessageId: d.MessageId, Timestamp: d.Timestamp})
 		}
 	}()
 
 	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
 	<-forever
+
 	return nil
 }

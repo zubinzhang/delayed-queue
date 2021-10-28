@@ -12,15 +12,16 @@ import (
 func main() {
 	mq, err := taskqueue.NewRabbitMQ("amqp://admin:password@localhost:5672/", taskqueue.Option{
 		QueueName: "test",
-	})
+	}).Connect()
 	if err != nil {
 		fmt.Printf("%+v", err)
 	}
 
-	defer mq.Destory()
+	defer mq.Destroy()
 
 	onConsumed := func(msg taskqueue.Message) error {
 		log.Printf("Received a message: %s", msg.Payload)
+
 		return nil
 	}
 
