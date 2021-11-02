@@ -10,9 +10,7 @@ import (
 )
 
 func main() {
-	mq, err := taskqueue.NewTaskQueue("amqp://admin:password@localhost:5672/", taskqueue.Option{
-		ServiceName: "test",
-	}).Connect()
+	mq, err := taskqueue.New("amqp://admin:password@localhost:5672/", taskqueue.SererviceName("test")).Connect()
 	if err != nil {
 		fmt.Printf("%+v", err)
 	}

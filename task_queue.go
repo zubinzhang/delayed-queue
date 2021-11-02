@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	defaultPrefetchCount  = 1
-	defaultMessageTTL     = int(10 * time.Second)
-	DELAYED_EXCHANGE_TYPE = "x-delayed-message"
-	DELAYED_TYPE          = "direct"
+	DEFAULT_PREFETCH_COUNT = 1
+	DEFAULT_MESSAGE_TTL    = 0
+	DEFAULTSERVICE_NAME    = "task_queue"
+	DELAYED_EXCHANGE_TYPE  = "x-delayed-message"
+	DELAYED_TYPE           = "direct"
 )
 
 type Message struct {
@@ -29,35 +30,36 @@ type Message struct {
 	Timestamp     time.Time
 }
 
-type Option struct {
-	ServiceName   string
-	MessageTTL    int
-	PrefetchCount int
-}
-
 type TaskQueue struct {
-	conn        *amqp.Connection
-	channel     *amqp.Channel
-	url         string
-	option      Option
-	workQueue   string
-	failedQueue string
-	exchange    string
-	key         string
+	conn          *amqp.Connection
+	channel       *amqp.Channel
+	url           string
+	messageTTL    int
+	prefetchCount int
+	workQueue     string
+	failedQueue   string
+	exchange      string
+	key           string
 }
 
 // new rabbitmq instance.
-func NewTaskQueue(amqpUrl string, config Option) *TaskQueue {
-	if config.ServiceName == "" {
-		panic("serviceName can not be empty")
+func New(url string, options ...func(*TaskQueue)) *TaskQueue {
+	tq := TaskQueue{
+		conn:          nil,
+		channel:       nil,
+		url:           url,
+		messageTTL:    DEFAULT_MESSAGE_TTL,
+		prefetchCount: DEFAULT_PREFETCH_COUNT,
+		exchange:      fmt.Sprintf("%s_exchange", DEFAULTSERVICE_NAME),
+		workQueue:     fmt.Sprintf("%s_work_queue", DEFAULTSERVICE_NAME),
+		failedQueue:   fmt.Sprintf("%s_failed_queue", DEFAULTSERVICE_NAME),
 	}
-	return &TaskQueue{
-		url:         amqpUrl,
-		option:      config,
-		exchange:    fmt.Sprintf("%s_exchange", config.ServiceName),
-		workQueue:   fmt.Sprintf("%s_work_queue", config.ServiceName),
-		failedQueue: fmt.Sprintf("%s_failed_queue", config.ServiceName),
+
+	for _, option := range options {
+		option(&tq)
 	}
+
+	return &tq
 }
 
 // connect connection and channel
