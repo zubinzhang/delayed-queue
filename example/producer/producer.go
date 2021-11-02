@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/zubinzhang/taskqueue"
 )
@@ -14,9 +15,11 @@ func main() {
 		fmt.Printf("%+v", err)
 	}
 
+	fmt.Println(int64(time.Second / time.Millisecond))
+
 	defer mq.Destroy()
 
-	err = mq.Publish("test", "Hello", 1000)
+	err = mq.Publish("test", "Hello", 10*time.Second)
 	if err != nil {
 		fmt.Printf("%+v", err)
 	}

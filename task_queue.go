@@ -17,7 +17,6 @@ import (
 
 const (
 	DEFAULT_PREFETCH_COUNT = 1
-	DEFAULT_MESSAGE_TTL    = 0
 	DEFAULTSERVICE_NAME    = "task_queue"
 	DELAYED_EXCHANGE_TYPE  = "x-delayed-message"
 	DELAYED_TYPE           = "direct"
@@ -34,7 +33,6 @@ type TaskQueue struct {
 	conn          *amqp.Connection
 	channel       *amqp.Channel
 	url           string
-	messageTTL    int
 	prefetchCount int
 	workQueue     string
 	failedQueue   string
@@ -48,7 +46,6 @@ func New(url string, options ...func(*TaskQueue)) *TaskQueue {
 		conn:          nil,
 		channel:       nil,
 		url:           url,
-		messageTTL:    DEFAULT_MESSAGE_TTL,
 		prefetchCount: DEFAULT_PREFETCH_COUNT,
 		exchange:      fmt.Sprintf("%s_exchange", DEFAULTSERVICE_NAME),
 		workQueue:     fmt.Sprintf("%s_work_queue", DEFAULTSERVICE_NAME),
@@ -85,7 +82,7 @@ func (q *TaskQueue) Destroy() {
 }
 
 // publish a msg.
-func (q *TaskQueue) Publish(jobName, body string, delay int) error {
+func (q *TaskQueue) Publish(jobName, body string, delay time.Duration) error {
 	args := make(amqp.Table)
 	args["x-delayed-type"] = DELAYED_TYPE
 	err := q.channel.ExchangeDeclare(
@@ -125,7 +122,7 @@ func (q *TaskQueue) Publish(jobName, body string, delay int) error {
 
 	headers := make(amqp.Table)
 	if delay != 0 {
-		headers["x-delay"] = delay
+		headers["x-delay"] = int64(delay / time.Millisecond)
 	}
 
 	err = q.channel.Publish(
@@ -179,6 +176,15 @@ func (q *TaskQueue) Consume(handler func(msg Message) error) error {
 	err = q.channel.QueueBind(q.workQueue, q.workQueue, q.exchange, false, nil)
 	if err != nil {
 		return errors.Wrap(err, "Failed to bind queue")
+	}
+
+	err = q.channel.Qos(
+		q.prefetchCount, // prefetch count
+		0,               // prefetch size
+		false,           // global
+	)
+	if err != nil {
+		return errors.Wrap(err, "Failed to set QoS")
 	}
 
 	msgs, err := q.channel.Consume(
