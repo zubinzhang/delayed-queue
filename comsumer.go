@@ -3,6 +3,8 @@
 package taskqueue
 
 import (
+	"time"
+
 	"github.com/marmotedu/log"
 	"github.com/pkg/errors"
 	"github.com/streadway/amqp"
@@ -45,28 +47,44 @@ func NewComsumer(url string, options ...ComsumerOptions) (*Comsumer, error) {
 // consume from the queue.
 func (c *Comsumer) Consume(handler func(msg Message) error) (err error) {
 
-	msgs, err := c.announceQueue()
-	if err != nil {
-		return nil
-	}
-
 	forever := make(chan bool)
 
 	go func() {
-		for d := range msgs {
-			payload := &protos.Payload{}
-			err = proto.Unmarshal(d.Body, payload)
+		for {
+			deliveries, err := c.announceQueue()
 			if err != nil {
-				log.Fatalw("unmarshaling error: ", err)
+				log.Errorf("consume failed, err: %v", err)
+				time.Sleep(3 * time.Second)
+				continue
 			}
-			handler(Message{CorrelationId: d.CorrelationId, Payload: payload.Body, MessageId: d.MessageId, Timestamp: d.Timestamp})
+
+			for d := range deliveries {
+				payload := &protos.Payload{}
+				err = proto.Unmarshal(d.Body, payload)
+				if err != nil {
+					log.Fatalf("unmarshaling error: ", err)
+				}
+				handler(Message{
+					CorrelationId: d.CorrelationId,
+					Payload:       payload.Body,
+					MessageId:     d.MessageId,
+					Timestamp:     d.Timestamp,
+				})
+			}
 		}
 	}()
 
-	// if errChan := <-c.closeChan; errChan != nil {
-	// 	log.Errorf("RabbitMQ disconnection: %v", errChan)
-	// 	msgs = c.handleDisconnect()
-	// }
+	// go func() {
+	// 	for {
+	// 		reason, ok := <-c.closeChan
+	// 		// exit this goroutine if closed by developer
+	// 		if !ok {
+	// 			log.Info("connection closed--------")
+	// 			break
+	// 		}
+	// 		log.Infof("**********", reason.Reason)
+	// 	}
+	// }()
 
 	log.Info(" [*] Waiting for messages. To exit press CTRL+C")
 	<-forever
@@ -90,23 +108,3 @@ func (c *Comsumer) announceQueue() (<-chan amqp.Delivery, error) {
 	}
 	return deliveries, nil
 }
-
-// // handleDisconnect handle a disconnection trying to reconnect every 5s.
-// func (c *Comsumer) handleDisconnect() <-chan amqp.Delivery {
-// 	log.Info("Trying to reconnect to rabbitMQ...")
-// 	time.Sleep(5 * time.Second)
-
-// 	if err := c.connect(); err != nil {
-// 		log.Errorf("RabbitMQ connect error: %v", err)
-// 	}
-
-// 	if err := c.init(); err != nil {
-// 		log.Errorf("RabbitMQ init error: %v", err)
-// 	}
-
-// 	delivery, err := c.announceQueue()
-// 	if err != nil {
-// 		log.Errorf("Announce queue error: %v", err)
-// 	}
-// 	return delivery
-// }

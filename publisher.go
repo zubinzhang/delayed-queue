@@ -37,6 +37,8 @@ func NewPublisher(url string, options ...PublisherOptions) (*Publisher, error) {
 		return nil, err
 	}
 
+	go p.handleDisconnect()
+
 	err = p.init()
 	if err != nil {
 		return nil, err
