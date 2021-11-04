@@ -4,25 +4,22 @@ package taskqueue
 
 import (
 	"fmt"
-	"log"
 	"time"
 
-	"github.com/go-basic/uuid"
+	"github.com/marmotedu/log"
 	"github.com/pkg/errors"
 	"github.com/streadway/amqp"
-	"github.com/zubinzhang/taskqueue/protos"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
 	DEFAULT_PREFETCH_COUNT = 1
-	DEFAULTSERVICE_NAME    = "task_queue"
+	DEFAULT_SERVICE_NAME   = "task_queue"
 	DELAYED_EXCHANGE_TYPE  = "x-delayed-message"
 	DELAYED_TYPE           = "direct"
 )
 
 type Message struct {
+	JobName       string
 	Payload       []byte
 	CorrelationId string
 	MessageId     string
@@ -30,192 +27,128 @@ type Message struct {
 }
 
 type TaskQueue struct {
-	conn          *amqp.Connection
+	connection    *amqp.Connection
 	channel       *amqp.Channel
 	url           string
-	prefetchCount int
+	exchange      string
 	workQueue     string
 	failedQueue   string
-	exchange      string
-	key           string
+	prefetchCount int
+	closeChan     chan *amqp.Error
+	quitChan      chan bool
 }
 
-// new rabbitmq instance.
-func New(url string, options ...func(*TaskQueue)) *TaskQueue {
-	tq := TaskQueue{
-		conn:          nil,
-		channel:       nil,
-		url:           url,
+func getDefaultTaskQueue() TaskQueue {
+	return TaskQueue{
+		exchange:      fmt.Sprintf("%s_exchange", DEFAULT_SERVICE_NAME),
+		workQueue:     fmt.Sprintf("%s_work_queue", DEFAULT_SERVICE_NAME),
+		failedQueue:   fmt.Sprintf("%s_failed_queue", DEFAULT_SERVICE_NAME),
 		prefetchCount: DEFAULT_PREFETCH_COUNT,
-		exchange:      fmt.Sprintf("%s_exchange", DEFAULTSERVICE_NAME),
-		workQueue:     fmt.Sprintf("%s_work_queue", DEFAULTSERVICE_NAME),
-		failedQueue:   fmt.Sprintf("%s_failed_queue", DEFAULTSERVICE_NAME),
+		quitChan:      make(chan bool),
 	}
-
-	for _, option := range options {
-		option(&tq)
-	}
-
-	return &tq
 }
 
-// connect connection and channel
-func (q *TaskQueue) Connect() (*TaskQueue, error) {
+func (tq *TaskQueue) connect() error {
 	var err error
 
-	q.conn, err = amqp.Dial(q.url)
+	tq.connection, err = amqp.Dial(tq.url)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to connect to RabbitMQ")
+		return errors.Wrap(err, "Failed to connect to RabbitMQ")
 	}
 
-	q.channel, err = q.conn.Channel()
+	tq.channel, err = tq.connection.Channel()
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to open a channel")
-	}
-	return q, nil
-}
-
-// close channel and connection.
-func (q *TaskQueue) Destroy() {
-	q.channel.Close()
-	q.conn.Close()
-}
-
-// publish a msg.
-func (q *TaskQueue) Publish(jobName, body string, delay time.Duration) error {
-	args := make(amqp.Table)
-	args["x-delayed-type"] = DELAYED_TYPE
-	err := q.channel.ExchangeDeclare(
-		q.exchange,            // name
-		DELAYED_EXCHANGE_TYPE, // type
-		true,                  // durable
-		false,                 // auto-deleted
-		false,                 // internal
-		false,                 // no-wait
-		args,                  // arguments
-	)
-
-	if err != nil {
-		return errors.Wrap(err, "Failed to declare a exchange")
-	}
-	// _, err = q.channel.QueueDeclare(
-	// 	q.option.queueName, // name
-	// 	false,              // durable
-	// 	false,              // delete when unused
-	// 	false,              // exclusive
-	// 	false,              // no-wait
-	// 	nil,                // arguments
-	// )
-	// if err != nil {
-	// 	return errors.Wrap(err, "Failed to declare a queue")
-	// }
-
-	payload, err := proto.Marshal(&protos.Payload{
-		Id:        uuid.New(),
-		Timestamp: timestamppb.Now(),
-		JobName:   jobName,
-		Body:      []byte(body),
-	})
-	if err != nil {
-		errors.Wrap(err, "Failed to marshaling payload")
+		return errors.Wrap(err, "Failed to open a channel")
 	}
 
-	headers := make(amqp.Table)
-	if delay != 0 {
-		headers["x-delay"] = int64(delay / time.Millisecond)
-	}
+	log.Info("Connect to rabbitMQ established")
 
-	err = q.channel.Publish(
-		q.exchange,  // exchange
-		q.workQueue, // routing key
-		false,       // mandatory
-		false,       // immediate
-		amqp.Publishing{
-			DeliveryMode: amqp.Persistent,
-			Timestamp:    time.Now(),
-			ContentType:  "text/plain",
-			Body:         payload,
-			Headers:      headers,
-		})
-	if err != nil {
-		return errors.Wrap(err, "Failed to publish a message")
-	}
+	tq.closeChan = make(chan *amqp.Error)
+	tq.connection.NotifyClose(tq.closeChan)
 
 	return nil
 }
 
-// consume msg.
-func (q *TaskQueue) Consume(handler func(msg Message) error) error {
+// handleDisconnect handle a disconnection trying to reconnect every 5s.
+func (tq *TaskQueue) handleDisconnect() {
+	for {
+		select {
+		case errChan := <-tq.closeChan:
+			if errChan != nil {
+				log.Errorf("RabbitMQ disconnection: %v", errChan)
+			}
+		case <-tq.quitChan:
+			tq.connection.Close()
+			tq.channel.Close()
+			tq.connection = nil
+			tq.channel = nil
+			log.Debug("RabbitMQ has been shut down...")
+			tq.quitChan <- true
+			return
+		}
+
+		log.Info("Trying to reconnect to rabbitMQ...")
+		time.Sleep(5 * time.Second)
+
+		if err := tq.connect(); err != nil {
+			log.Errorf("RabbitMQ connect error: %v", err)
+		}
+
+		if err := tq.init(); err != nil {
+			log.Errorf("RabbitMQ init error: %v", err)
+		}
+	}
+}
+
+// declare exchange and queue if not exist
+func (tq *TaskQueue) init() (err error) {
 	args := make(amqp.Table)
 	args["x-delayed-type"] = DELAYED_TYPE
-	err := q.channel.ExchangeDeclare(
-		q.exchange,            // name
-		DELAYED_EXCHANGE_TYPE, // type
-		true,                  // durable
-		false,                 // auto-deleted
-		false,                 // internal
-		false,                 // no-wait
-		args,                  // arguments
+	err = tq.channel.ExchangeDeclare(
+		tq.exchange,
+		DELAYED_EXCHANGE_TYPE,
+		true,
+		false,
+		false,
+		false,
+		args,
 	)
 	if err != nil {
 		return errors.Wrap(err, "Failed to declare a exchange")
 	}
 
-	_, err = q.channel.QueueDeclare(
-		q.workQueue, // name
-		false,       // durable
-		false,       // delete when unused
-		false,       // exclusive
-		false,       // no-wait
-		nil,         // arguments
+	_, err = tq.channel.QueueDeclare(
+		tq.workQueue, // name
+		false,        // durable
+		false,        // delete when unused
+		false,        // exclusive
+		false,        // no-wait
+		nil,          // arguments
 	)
 	if err != nil {
 		return errors.Wrap(err, "Failed to declare a queue")
 	}
 
-	err = q.channel.QueueBind(q.workQueue, q.workQueue, q.exchange, false, nil)
+	err = tq.channel.QueueBind(tq.workQueue, tq.workQueue, tq.exchange, false, nil)
 	if err != nil {
 		return errors.Wrap(err, "Failed to bind queue")
 	}
 
-	err = q.channel.Qos(
-		q.prefetchCount, // prefetch count
-		0,               // prefetch size
-		false,           // global
+	err = tq.channel.Qos(
+		tq.prefetchCount, // prefetch count
+		0,                // prefetch size
+		false,            // global
 	)
 	if err != nil {
 		return errors.Wrap(err, "Failed to set QoS")
 	}
 
-	msgs, err := q.channel.Consume(
-		q.workQueue, // queue
-		"",          // consumer
-		true,        // auto-ack
-		false,       // exclusive
-		false,       // no-local
-		false,       // no-wait
-		nil,         // args
-	)
-	if err != nil {
-		return errors.Wrap(err, "Failed to register a consumer")
-	}
-
-	forever := make(chan bool)
-
-	go func() {
-		for d := range msgs {
-			payload := &protos.Payload{}
-			err = proto.Unmarshal(d.Body, payload)
-			if err != nil {
-				log.Fatal("unmarshaling error: ", err)
-			}
-			fmt.Println(payload)
-			handler(Message{CorrelationId: d.CorrelationId, Payload: payload.Body, MessageId: d.MessageId, Timestamp: d.Timestamp})
-		}
-	}()
-
-	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
-	<-forever
-
 	return nil
+}
+
+// Disconnect the channel and connection
+func (tq *TaskQueue) Disconnect() {
+	tq.quitChan <- true
+	log.Debug("shutting down rabbitMQ's connection...")
+	<-tq.quitChan
 }

@@ -6,9 +6,9 @@ import (
 	"fmt"
 )
 
-type Option func(*TaskQueue)
+type Options func(*TaskQueue)
 
-func SererviceName(name string) Option {
+func SererviceName(name string) Options {
 	return func(tq *TaskQueue) {
 		tq.exchange = fmt.Sprintf("%s_exchange", name)
 		tq.workQueue = fmt.Sprintf("%s_work_queue", name)
@@ -16,7 +16,7 @@ func SererviceName(name string) Option {
 	}
 }
 
-func PrefetchCount(count int) Option {
+func PrefetchCount(count int) Options {
 	return func(tq *TaskQueue) {
 		tq.prefetchCount = count
 	}

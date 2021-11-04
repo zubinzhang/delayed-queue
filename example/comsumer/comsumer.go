@@ -10,12 +10,12 @@ import (
 )
 
 func main() {
-	mq, err := taskqueue.New("amqp://admin:password@localhost:5672/", taskqueue.SererviceName("test")).Connect()
+	comsumer, err := taskqueue.NewComsumer("amqp://admin:password@localhost:5672/", taskqueue.WithComsumerOptionsSererviceName("test"))
 	if err != nil {
 		fmt.Printf("%+v", err)
 	}
 
-	defer mq.Destroy()
+	defer comsumer.Disconnect()
 
 	onConsumed := func(msg taskqueue.Message) error {
 		log.Printf("Received a message: %s", msg.Payload)
@@ -23,7 +23,7 @@ func main() {
 		return nil
 	}
 
-	err = mq.Consume(onConsumed)
+	err = comsumer.Consume(onConsumed)
 
 	if err != nil {
 		fmt.Printf("%+v", err)

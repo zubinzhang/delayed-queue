@@ -10,16 +10,14 @@ import (
 )
 
 func main() {
-	mq, err := taskqueue.New("amqp://admin:password@localhost:5672/", taskqueue.SererviceName("test")).Connect()
+	publisher, err := taskqueue.NewPublisher("amqp://admin:password@localhost:5672/", taskqueue.WithPublisherOptionsSererviceName("test"))
 	if err != nil {
 		fmt.Printf("%+v", err)
 	}
 
-	fmt.Println(int64(time.Second / time.Millisecond))
+	defer publisher.Disconnect()
 
-	defer mq.Destroy()
-
-	err = mq.Publish("test", "Hello", 10*time.Second)
+	err = publisher.Publish("test", []byte("Hello"), 3*time.Second)
 	if err != nil {
 		fmt.Printf("%+v", err)
 	}
