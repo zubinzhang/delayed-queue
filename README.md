@@ -19,14 +19,19 @@ docker compose up -d
 You can publish the message by calling `publish()`
 
 ```go
-publisher, err := taskqueue.NewPublisher("amqp://127.0.0.1:5672", taskqueue.WithPublisherOptionsSererviceName("test"))
+	publisher, err := queue.NewPublisher(
+		"amqp://admin:password@localhost:5672/",
+		queue.WithPublisherOptionsExchange("test"),
+		queue.WithPublisherOptionsQueue("test"),
+		queue.WithPublisherOptionsKey("test"),
+	)
 	if err != nil {
 		fmt.Printf("%+v", err)
 	}
 
 	defer publisher.Disconnect()
 
-	err = publisher.Publish("test", []byte("Hello"), 3*time.Second)
+	err = publisher.Publish([]byte("Hello"), 3*time.Second)
 	if err != nil {
 		fmt.Printf("%+v", err)
 	}
@@ -35,23 +40,22 @@ publisher, err := taskqueue.NewPublisher("amqp://127.0.0.1:5672", taskqueue.With
 ## Subscribe Message
 
 ```go
-comsumer, err := taskqueue.NewComsumer("amqp://admin:password@localhost:5672/", taskqueue.WithComsumerOptionsSererviceName("test"))
+comsumer, err := queue.NewComsumer(
+		"amqp://admin:password@localhost:5672/",
+		queue.WithComsumerOptionsExchange("test"),
+		queue.WithComsumerOptionsQueue("test"),
+		queue.WithComsumerOptionsKey("test"),
+	)
 	if err != nil {
 		fmt.Printf("%+v", err)
 	}
 
 	defer comsumer.Disconnect()
 
-	onConsumed := func(msg taskqueue.Message) error {
-		log.Printf("Received a message: %s", msg.Payload)
+	deliveries := comsumer.Consume()
 
-		return nil
-	}
-
-	err = comsumer.Consume(onConsumed)
-
-	if err != nil {
-		fmt.Printf("%+v", err)
+	for d := range deliveries {
+		log.Printf("Received a message: %s", d.Body)
 	}
 ```
 
