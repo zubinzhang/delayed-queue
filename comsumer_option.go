@@ -1,18 +1,27 @@
 // Copyright 2021 Zubin. All rights reserved.
 
-package delayedqueue
-
-import (
-	"fmt"
-)
+package delayedq
 
 type ComsumerOptions func(*Comsumer)
 
-func WithComsumerOptionsSererviceName(name string) ComsumerOptions {
+// WithComsumerOptionsPriority returns a function that sets the exchange.
+func WithComsumerOptionsExchange(exchange string) ComsumerOptions {
 	return func(c *Comsumer) {
-		c.DelayedQueue.exchange = fmt.Sprintf("%s_exchange", name)
-		c.DelayedQueue.workQueue = fmt.Sprintf("%s_work_queue", name)
-		c.DelayedQueue.failedQueue = fmt.Sprintf("%s_failed_queue", name)
+		c.DelayedQueue.exchange = exchange
+	}
+}
+
+// WithComsumerOptionsPriority returns a function that sets the queue.
+func WithComsumerOptionsQueue(queue string) ComsumerOptions {
+	return func(c *Comsumer) {
+		c.DelayedQueue.queue = queue
+	}
+}
+
+// WithComsumerOptionsPriority returns a function that sets the binding key.
+func WithComsumerOptionsKey(key string) ComsumerOptions {
+	return func(c *Comsumer) {
+		c.DelayedQueue.key = key
 	}
 }
 

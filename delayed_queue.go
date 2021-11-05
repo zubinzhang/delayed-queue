@@ -1,9 +1,8 @@
 // Copyright 2021 Zubin. All rights reserved.
 
-package delayedqueue
+package delayedq
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/marmotedu/log"
@@ -13,27 +12,17 @@ import (
 
 const (
 	DEFAULT_PREFETCH_COUNT = 1
-	DEFAULT_SERVICE_NAME   = "task_queue"
 	DELAYED_EXCHANGE_TYPE  = "x-delayed-message"
 	DELAYED_TYPE           = "direct"
 )
-
-type Message struct {
-	JobName       string
-	Payload       []byte
-	CorrelationId string
-	MessageId     string
-	Timestamp     time.Time
-	Priority      int
-}
 
 type DelayedQueue struct {
 	connection    *amqp.Connection
 	channel       *amqp.Channel
 	url           string
 	exchange      string
-	workQueue     string
-	failedQueue   string
+	queue         string
+	key           string
 	prefetchCount int
 	closeChan     chan *amqp.Error
 	quitChan      chan bool
@@ -41,9 +30,9 @@ type DelayedQueue struct {
 
 func getDefaultTaskQueue() DelayedQueue {
 	return DelayedQueue{
-		exchange:      fmt.Sprintf("%s_exchange", DEFAULT_SERVICE_NAME),
-		workQueue:     fmt.Sprintf("%s_work_queue", DEFAULT_SERVICE_NAME),
-		failedQueue:   fmt.Sprintf("%s_failed_queue", DEFAULT_SERVICE_NAME),
+		exchange:      "delayed_queue_exchange",
+		queue:         "delayed_queue_queue",
+		key:           "delayed_queue_key",
 		prefetchCount: DEFAULT_PREFETCH_COUNT,
 		quitChan:      make(chan bool),
 	}
@@ -121,18 +110,18 @@ func (dq *DelayedQueue) init() (err error) {
 	}
 
 	_, err = dq.channel.QueueDeclare(
-		dq.workQueue, // name
-		false,        // durable
-		false,        // delete when unused
-		false,        // exclusive
-		false,        // no-wait
-		nil,          // arguments
+		dq.queue, // name
+		false,    // durable
+		false,    // delete when unused
+		false,    // exclusive
+		false,    // no-wait
+		nil,      // arguments
 	)
 	if err != nil {
 		return errors.Wrap(err, "Failed to declare a queue")
 	}
 
-	err = dq.channel.QueueBind(dq.workQueue, dq.workQueue, dq.exchange, false, nil)
+	err = dq.channel.QueueBind(dq.queue, dq.key, dq.exchange, false, nil)
 	if err != nil {
 		return errors.Wrap(err, "Failed to bind queue")
 	}

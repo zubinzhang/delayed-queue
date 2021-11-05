@@ -1,16 +1,12 @@
 // Copyright 2021 Zubin. All rights reserved.
 
-package delayedqueue
+package delayedq
 
 import (
 	"time"
 
-	"github.com/go-basic/uuid"
 	"github.com/pkg/errors"
 	"github.com/streadway/amqp"
-	"github.com/zubinzhang/delayedqueue/protos"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Publisher struct {
@@ -48,17 +44,7 @@ func NewPublisher(url string, options ...PublisherOptions) (*Publisher, error) {
 }
 
 // publish the provided data over the connection
-func (p *Publisher) Publish(jobName string, body []byte, delay time.Duration) (err error) {
-	payload, err := proto.Marshal(&protos.Payload{
-		Id:        uuid.New(),
-		JobName:   jobName,
-		Timestamp: timestamppb.Now(),
-		Body:      body,
-	})
-	if err != nil {
-		return errors.Wrap(err, "Failed to marshaling payload")
-	}
-
+func (p *Publisher) Publish(body []byte, delay time.Duration) (err error) {
 	headers := make(amqp.Table)
 	if delay != 0 {
 		headers["x-delay"] = int64(delay / time.Millisecond)
@@ -68,15 +54,15 @@ func (p *Publisher) Publish(jobName string, body []byte, delay time.Duration) (e
 		DeliveryMode: amqp.Persistent,
 		Timestamp:    time.Now(),
 		ContentType:  "text/plain",
-		Body:         payload,
+		Body:         body,
 		Headers:      headers,
 	}
 
 	err = p.channel.Publish(
-		p.exchange,  // exchange
-		p.workQueue, // routing key
-		false,       // mandatory
-		false,       // immediate
+		p.exchange, // exchange
+		p.key,      // routing key
+		false,      // mandatory
+		false,      // immediate
 		msg,
 	)
 	if err != nil {

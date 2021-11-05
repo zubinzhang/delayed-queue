@@ -1,4 +1,4 @@
-module github.com/zubinzhang/delayedqueue
+module github.com/zubinzhang/delayed-queue
 
 go 1.17
 
