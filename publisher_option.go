@@ -1,6 +1,6 @@
 // Copyright 2021 Zubin. All rights reserved.
 
-package taskqueue
+package delayedqueue
 
 import (
 	"fmt"
@@ -16,9 +16,9 @@ const (
 
 func WithPublisherOptionsSererviceName(name string) PublisherOptions {
 	return func(p *Publisher) {
-		p.TaskQueue.exchange = fmt.Sprintf("%s_exchange", name)
-		p.TaskQueue.workQueue = fmt.Sprintf("%s_work_queue", name)
-		p.TaskQueue.failedQueue = fmt.Sprintf("%s_failed_queue", name)
+		p.DelayedQueue.exchange = fmt.Sprintf("%s_exchange", name)
+		p.DelayedQueue.workQueue = fmt.Sprintf("%s_work_queue", name)
+		p.DelayedQueue.failedQueue = fmt.Sprintf("%s_failed_queue", name)
 	}
 }
 

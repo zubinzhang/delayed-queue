@@ -1,6 +1,6 @@
 // Copyright 2021 Zubin. All rights reserved.
 
-package taskqueue
+package delayedqueue
 
 import (
 	"fmt"
@@ -24,9 +24,10 @@ type Message struct {
 	CorrelationId string
 	MessageId     string
 	Timestamp     time.Time
+	Priority      int
 }
 
-type TaskQueue struct {
+type DelayedQueue struct {
 	connection    *amqp.Connection
 	channel       *amqp.Channel
 	url           string
@@ -38,8 +39,8 @@ type TaskQueue struct {
 	quitChan      chan bool
 }
 
-func getDefaultTaskQueue() TaskQueue {
-	return TaskQueue{
+func getDefaultTaskQueue() DelayedQueue {
+	return DelayedQueue{
 		exchange:      fmt.Sprintf("%s_exchange", DEFAULT_SERVICE_NAME),
 		workQueue:     fmt.Sprintf("%s_work_queue", DEFAULT_SERVICE_NAME),
 		failedQueue:   fmt.Sprintf("%s_failed_queue", DEFAULT_SERVICE_NAME),
@@ -48,77 +49,79 @@ func getDefaultTaskQueue() TaskQueue {
 	}
 }
 
-func (tq *TaskQueue) connect() error {
+func (dq *DelayedQueue) connect() error {
 	var err error
 
-	tq.connection, err = amqp.Dial(tq.url)
+	dq.connection, err = amqp.Dial(dq.url)
 	if err != nil {
 		return errors.Wrap(err, "Failed to connect to RabbitMQ")
 	}
 
-	tq.channel, err = tq.connection.Channel()
+	dq.channel, err = dq.connection.Channel()
 	if err != nil {
 		return errors.Wrap(err, "Failed to open a channel")
 	}
 
-	log.Info("Connect to rabbitMQ established")
+	log.Debug("Connect to rabbitMQ established")
 
-	tq.closeChan = make(chan *amqp.Error)
-	tq.connection.NotifyClose(tq.closeChan)
+	dq.closeChan = make(chan *amqp.Error)
+	dq.connection.NotifyClose(dq.closeChan)
 
 	return nil
 }
 
 // handleDisconnect handle a disconnection trying to reconnect every 5s.
-func (tq *TaskQueue) handleDisconnect() {
+func (dq *DelayedQueue) handleDisconnect() {
 	for {
 		select {
-		case errChan := <-tq.closeChan:
+		case errChan := <-dq.closeChan:
 			if errChan != nil {
 				log.Errorf("RabbitMQ disconnection: %v", errChan)
 			}
-		case <-tq.quitChan:
-			tq.connection.Close()
-			tq.channel.Close()
-			tq.connection = nil
-			tq.channel = nil
+		case <-dq.quitChan:
+			dq.connection.Close()
+			dq.channel.Close()
+			dq.connection = nil
+			dq.channel = nil
 			log.Debug("RabbitMQ has been shut down...")
-			tq.quitChan <- true
+			dq.quitChan <- true
 			return
 		}
 
 		log.Info("Trying to reconnect to rabbitMQ...")
 		time.Sleep(5 * time.Second)
 
-		if err := tq.connect(); err != nil {
+		if err := dq.connect(); err != nil {
 			log.Errorf("RabbitMQ connect error: %v", err)
 		}
 
-		if err := tq.init(); err != nil {
+		log.Info("Connect to rabbitMQ established")
+
+		if err := dq.init(); err != nil {
 			log.Errorf("RabbitMQ init error: %v", err)
 		}
 	}
 }
 
 // declare exchange and queue if not exist
-func (tq *TaskQueue) init() (err error) {
+func (dq *DelayedQueue) init() (err error) {
 	args := make(amqp.Table)
 	args["x-delayed-type"] = DELAYED_TYPE
-	err = tq.channel.ExchangeDeclare(
-		tq.exchange,
-		DELAYED_EXCHANGE_TYPE,
-		true,
-		false,
-		false,
-		false,
-		args,
+	err = dq.channel.ExchangeDeclare(
+		dq.exchange,           // name
+		DELAYED_EXCHANGE_TYPE, // type
+		true,                  // durable
+		false,                 // auto-deleted
+		false,                 // internal
+		false,                 // noWait
+		args,                  // arguments
 	)
 	if err != nil {
 		return errors.Wrap(err, "Failed to declare a exchange")
 	}
 
-	_, err = tq.channel.QueueDeclare(
-		tq.workQueue, // name
+	_, err = dq.channel.QueueDeclare(
+		dq.workQueue, // name
 		false,        // durable
 		false,        // delete when unused
 		false,        // exclusive
@@ -129,13 +132,13 @@ func (tq *TaskQueue) init() (err error) {
 		return errors.Wrap(err, "Failed to declare a queue")
 	}
 
-	err = tq.channel.QueueBind(tq.workQueue, tq.workQueue, tq.exchange, false, nil)
+	err = dq.channel.QueueBind(dq.workQueue, dq.workQueue, dq.exchange, false, nil)
 	if err != nil {
 		return errors.Wrap(err, "Failed to bind queue")
 	}
 
-	err = tq.channel.Qos(
-		tq.prefetchCount, // prefetch count
+	err = dq.channel.Qos(
+		dq.prefetchCount, // prefetch count
 		0,                // prefetch size
 		false,            // global
 	)
@@ -147,8 +150,8 @@ func (tq *TaskQueue) init() (err error) {
 }
 
 // Disconnect the channel and connection
-func (tq *TaskQueue) Disconnect() {
-	tq.quitChan <- true
+func (dq *DelayedQueue) Disconnect() {
+	dq.quitChan <- true
 	log.Debug("shutting down rabbitMQ's connection...")
-	<-tq.quitChan
+	<-dq.quitChan
 }
