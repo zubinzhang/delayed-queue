@@ -1,6 +1,6 @@
 // Copyright 2021 Zubin. All rights reserved.
 
-package taskqueue
+package delayedqueue
 
 import (
 	"time"
@@ -8,13 +8,13 @@ import (
 	"github.com/go-basic/uuid"
 	"github.com/pkg/errors"
 	"github.com/streadway/amqp"
-	"github.com/zubinzhang/taskqueue/protos"
+	"github.com/zubinzhang/delayedqueue/protos"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Publisher struct {
-	TaskQueue
+	DelayedQueue
 	retry    int
 	priority int
 }
@@ -22,9 +22,9 @@ type Publisher struct {
 // New Publisher returns a new publisher with an open channel.
 func NewPublisher(url string, options ...PublisherOptions) (*Publisher, error) {
 	p := &Publisher{
-		TaskQueue: getDefaultTaskQueue(),
-		retry:     0,
-		priority:  0,
+		DelayedQueue: getDefaultTaskQueue(),
+		retry:        0,
+		priority:     0,
 	}
 	for _, option := range options {
 		option(p)

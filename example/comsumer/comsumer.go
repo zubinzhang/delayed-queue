@@ -6,18 +6,18 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/zubinzhang/taskqueue"
+	"github.com/zubinzhang/delayedqueue"
 )
 
 func main() {
-	comsumer, err := taskqueue.NewComsumer("amqp://admin:password@localhost:5672/", taskqueue.WithComsumerOptionsSererviceName("test"))
+	comsumer, err := delayedqueue.NewComsumer("amqp://admin:password@localhost:5672/", delayedqueue.WithComsumerOptionsSererviceName("test"))
 	if err != nil {
 		fmt.Printf("%+v", err)
 	}
 
 	defer comsumer.Disconnect()
 
-	onConsumed := func(msg taskqueue.Message) error {
+	onConsumed := func(msg delayedqueue.Message) error {
 		log.Printf("Received a message: %s", msg.Payload)
 
 		return nil

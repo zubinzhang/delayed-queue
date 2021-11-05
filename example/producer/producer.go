@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zubinzhang/taskqueue"
+	"github.com/zubinzhang/delayedqueue"
 )
 
 func main() {
-	publisher, err := taskqueue.NewPublisher("amqp://admin:password@localhost:5672/", taskqueue.WithPublisherOptionsSererviceName("test"))
+	publisher, err := delayedqueue.NewPublisher("amqp://admin:password@localhost:5672/", delayedqueue.WithPublisherOptionsSererviceName("test"))
 	if err != nil {
 		fmt.Printf("%+v", err)
 	}
